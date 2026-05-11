@@ -80,4 +80,16 @@ python verify.py
     $k_{bk}=256$ 砍到 85 MB (4.5×)。这是论文引入 blocking 的核心动机
   - **速度**: 在我们的保守 $\rho$ 下, blocking **不会让小问题变快** — 切片数不变, $k_{bk}$ 小时反而多 launch
     多调度。论文 Fig 5 的 $k_{bk}=4096$ 最优依赖更紧的 $\rho$ 公式 (能让小 $k_{bk}$ 真减少切片)
-- ⏳ 等待用户 Stage 3 答疑 → 决定是否进入 Stage 4 (uint64 模拟 FP64 算术)
+
+- 🟢 **Stage 4（FP64 emulation via integer ops, 论文 §4.2）** — 已实现 + 三层 bit-exact 验证通过
+  - `fp64_emu.py`: Python ref `fp64_add` / `fp64_mul` (论文 Listing 1 schoolbook uint32×4 实现),
+    self-test **10004/10004** bit-exact vs 硬件 FP64
+  - `fp64_emu.py`: Triton `@jit emu_fp64_add` — 仅用 `tl.uint64` 操作 (normalize 用 56 次 unrolled
+    `tl.where`，因为 Triton 3.6 无 `tl.math.clz`)，**2497/2497** bit-exact vs Python ref & 硬件
+  - `ozaki_fp8_emu.py`: 新 `slice_iter_kernel_emu`, 内部 `(x+σ)-σ` 和 `x-v` 全走 `emu_fp64_add`,
+    `v · 2^(-c)` 是纯 exp 字段减法 (整数). 唯一未 emu 的是末端 cvt → FP8 (硬件 cvt 指令)
+  - 精度: emu slicing 输出与 Stage 2 hw slicing **逐 FP8 字节相同**; 端到端 Ozaki DGEMM `max_rel_err`
+    与 Stage 2 **完全相同** (2.21e-15 / 2.90e-15 / 3.97e-15 跨 256/512/1024)
+  - 性能: 比 Stage 2 慢 ~1.5-2× (slicing kernel 内 ~150 ops/elem vs Stage 2 的 ~3 ops/elem)
+  - 未做: emulate accumulation kernel (镜像 slicing emu, 工程苦劳, 留作扩展; PRINCIPLE.md §6 说明)
+- 🎉 **四个 stage 全部完成**, 论文 §4.1 / §4.2 / §4.3 的所有扩展都覆盖了
