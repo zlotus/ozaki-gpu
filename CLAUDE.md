@@ -70,4 +70,14 @@ python verify.py
   - 精度：与 Stage 1 持平，`max_rel_err ≤ 7e-15` 跨同样测试集
   - 性能：xlarge 21 ms（FP16 是 18 ms，cuBLAS DGEMM 16 ms），FP8 慢一点的根因是
     切片数 12×12=144 比 Stage 1 的 9×9=81 多得多 — 我们的 $\rho$ 公式较保守
-- ⏳ 等待用户 Stage 2 答疑 → 决定是否进入 Stage 3 (inner-product blocking)
+
+- 🟢 **Stage 3（Inner-product blocking）** — 已实现 + 验证通过
+  - **纯 host-side 改造**: 沿 k 维切成 $k_{bk}$ 长的块, 每块独立调 Stage 2 的整套流水线,
+    块间结果在共用的 FP64 C 上 in-place 累加。**没有新 Triton kernel** — 直接 import 复用 Stage 2 的部件
+  - 精度: 块间额外舍入 $\approx (k/k_{bk}) \cdot \mathrm{ulp}(C)$, 仍达标准 FP64 GEMM 量级。
+    所有 $k_{bk}$ 配置下 `max_rel_err ≤ 1e-14`, 全过测试
+  - **内存** (主要价值): m=2048, k=4096, n=2048 时, $k_{bk}=1024$ 把峰值显存从 384 MB 砍到 160 MB (2.4×);
+    $k_{bk}=256$ 砍到 85 MB (4.5×)。这是论文引入 blocking 的核心动机
+  - **速度**: 在我们的保守 $\rho$ 下, blocking **不会让小问题变快** — 切片数不变, $k_{bk}$ 小时反而多 launch
+    多调度。论文 Fig 5 的 $k_{bk}=4096$ 最优依赖更紧的 $\rho$ 公式 (能让小 $k_{bk}$ 真减少切片)
+- ⏳ 等待用户 Stage 3 答疑 → 决定是否进入 Stage 4 (uint64 模拟 FP64 算术)
