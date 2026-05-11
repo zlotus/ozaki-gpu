@@ -58,6 +58,16 @@ python verify.py
   - 三个 Triton kernel：`slice_iter_kernel`、`matmul_fp16_kernel`、`accumulate_kernel`
   - 主入口 `ozaki_dgemm(A, B)`；流式累加，内存占用 ≈ $s_A \cdot mk \cdot 2$ B（FP16 切片） + $mn \cdot 8$ B（FP64 输出）
   - 精度验证：`m=n=k ∈ {128, 256, 512, 1024, 2048}`，`max_rel_err` 全部 $\le 7 \times 10^{-15}$
-  - 性能：xlarge (2048³) 与 cuBLAS DGEMM 持平（1.1× 慢）— 论文动机的活体演示，Triton GEMM 调优后理论可反超
-  - 切片数估算偏论文 Table 3 多 1~2 片（保守的 $\rho$ 公式），不影响正确性
-- ⏳ 等待用户 Stage 1 答疑 → 决定是否进入 Stage 2 (FP8 路径)
+  - 性能：xlarge (2048³) 与 cuBLAS DGEMM 持平（1.1× 慢）
+
+- 🟢 **Stage 2（FP8 E4M3 + FP32 accum）** — 已实现 + 验证通过
+  - 算法骨架与 Stage 1 一致；切片 dtype 改 FP8，GEMM 后端改 cuBLASLt
+  - **GEMM 后端选择故事**：写 Triton FP8 kernel 时发现 Triton 3.6 在 sm_89 (Ada Lovelace)
+    上 FP8 GEMM 有 codegen 缺陷（k≥512 时累加精度爆炸，详见 stage2_fp8/PRINCIPLE.md §4.2）。
+    主路径改用 `torch._scaled_mm` (cuBLASLt FP8)，正是论文 §4.1 的实际后端。
+    Triton FP8 kernel 留作反面教材
+  - 关键实现细节：FP64→FP8 cvt 须经 FP32 中转；B 切片用 `.T` 视图（零拷贝）转 col-major 喂给 `_scaled_mm`
+  - 精度：与 Stage 1 持平，`max_rel_err ≤ 7e-15` 跨同样测试集
+  - 性能：xlarge 21 ms（FP16 是 18 ms，cuBLAS DGEMM 16 ms），FP8 慢一点的根因是
+    切片数 12×12=144 比 Stage 1 的 9×9=81 多得多 — 我们的 $\rho$ 公式较保守
+- ⏳ 等待用户 Stage 2 答疑 → 决定是否进入 Stage 3 (inner-product blocking)
